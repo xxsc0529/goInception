@@ -225,7 +225,6 @@ const (
 	ErrIndexNotExisted
 	ErrMaxVarcharLength
 	ErrMaxColumnCount
-	ER_ERROR_LAST
 	ER_CANT_ADD_AUTO_INCREMENT_COLUMN
 	ER_CANT_ADD_STORED_GENERATED_COLUMN
 	ER_CANT_MODIFY_AUTO_INCREMENT_COLUMN
@@ -241,6 +240,7 @@ const (
 	ER_CANT_ALTER_PARTITION_RULE
 	ER_NOT_SUPPORT_FEATURE_OR_FUNCTION_FOR_OB3
 	ER_NOT_ALLOW_MULTI_ALTER_STATEMENT_IN_ONE_STATEMENT
+	ER_ERROR_LAST
 )
 
 var ErrorsDefault = map[ErrorCode]string{
@@ -1208,7 +1208,31 @@ func (e ErrorCode) String() string {
 		return "er_tool_based_unique_index_warning"
 	case ER_CANT_DROP_COLUMN:
 		return "er_cant_drop_column"
-
+	// offline dll
+	case ER_CANT_ADD_AUTO_INCREMENT_COLUMN:
+		return "er_cant_add_auto_increment_column"
+	case ER_CANT_MODIFY_AUTO_INCREMENT_COLUMN:
+		return "er_cant_modify_auto_increment_column"
+	case ER_CANT_ADD_STORED_GENERATED_COLUMN:
+		return "er_cant_add_stored_generated_column"
+	case ER_CANT_MODIFY_PK_OR_UK_COLUMN:
+		return "er_cant_modify_pk_or_uk_column"
+	case ER_CANT_DROP_PRIMARY_KEY:
+		return "er_cant_drop_primary_key"
+	case ER_CANT_ADD_PRIMARY_KEY:
+		return "er_cant_add_primary_key"
+	case ER_CANT_DROP_PARTITION:
+		return "er_cant_drop_partition"
+	case ER_CANT_TRUNCATE_PARTITION:
+		return "er_cant_truncate_partition"
+	case ER_CANT_ALTER_PARTITION_RULE:
+		return "er_cant_alter_partition_rule"
+	case ER_CANT_ADD_COLUMNS_AND_CONSTRAINTS_IN_ONE_STATEMENT:
+		return "er_cant_add_columns_and_constraints_in_one_statement"
+	case ER_NOT_ALLOW_MULTI_ALTER_STATEMENT_IN_ONE_STATEMENT:
+		return "er_not_allow_multi_alter_statement_in_one_statement"
+	case ER_NOT_SUPPORT_FEATURE_OR_FUNCTION_FOR_OB3:
+		return "er_not_support_feature_or_function_for_ob3"
 	}
 	return ""
 }
