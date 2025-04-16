@@ -7492,33 +7492,72 @@ func (s *session) getExplainInfo(sql string, sqlId string) {
 	var rows []ExplainInfo
 
 	if s.dbType == DBTypeOceanBase {
-		var plan OceanBaseQueryPlan
-		if err := s.rawScan(sql, &plan); err != nil {
-			if myErr, ok := err.(*mysqlDriver.MySQLError); ok {
-				s.appendErrorMsg(myErr.Message)
-				if newRecord != nil {
-					newRecord.appendErrorMessage(myErr.Message)
-				}
-			} else {
-				s.appendErrorMsg(err.Error())
-				if newRecord != nil {
-					newRecord.appendErrorMessage(err.Error())
+		if s.dbVersion <= 3 {
+			var plan OceanBaseQueryPlan
+			if err := s.rawScan(sql, &plan); err != nil {
+				if myErr, ok := err.(*mysqlDriver.MySQLError); ok {
+					s.appendErrorMsg(myErr.Message)
+					if newRecord != nil {
+						newRecord.appendErrorMessage(myErr.Message)
+					}
+				} else {
+					s.appendErrorMsg(err.Error())
+					if newRecord != nil {
+						newRecord.appendErrorMessage(err.Error())
+					}
 				}
 			}
-		}
-		var planValue map[string]interface{}
-		_ = json.Unmarshal([]byte(plan.QueryPlan), &planValue)
-		if len(planValue) > 0 {
-			info := OceanBaseExplainInfo{}
-			_ = info.Unmarshal(planValue)
-			if info.Operator != "" {
-				rows = append(rows, ExplainInfo{Rows: info.EstRows})
+			var planValue map[string]interface{}
+			_ = json.Unmarshal([]byte(plan.QueryPlan), &planValue)
+			if len(planValue) > 0 {
+				info := OceanBaseExplainInfo{}
+				_ = info.Unmarshal(planValue)
+				if info.Operator != "" {
+					rows = append(rows, ExplainInfo{Rows: info.EstRows})
+				}
+				for _, v := range planValue {
+					childInfo := OceanBaseExplainInfo{}
+					_ = childInfo.Unmarshal(v)
+					if childInfo.Operator != "" {
+						rows = append(rows, ExplainInfo{Rows: childInfo.EstRows})
+					}
+				}
 			}
-			for _, v := range planValue {
-				childInfo := OceanBaseExplainInfo{}
-				_ = childInfo.Unmarshal(v)
-				if childInfo.Operator != "" {
-					rows = append(rows, ExplainInfo{Rows: childInfo.EstRows})
+		} else {
+			var plan []OceanBaseQueryPlan
+			if err := s.rawScan(sql, &plan); err != nil {
+				if myErr, ok := err.(*mysqlDriver.MySQLError); ok {
+					s.appendErrorMsg(myErr.Message)
+					if newRecord != nil {
+						newRecord.appendErrorMessage(myErr.Message)
+					}
+				} else {
+					s.appendErrorMsg(err.Error())
+					if newRecord != nil {
+						newRecord.appendErrorMessage(err.Error())
+					}
+				}
+			}
+			var result string
+			names := make([]string, len(plan))
+			for i, queryPlan := range plan {
+				names[i] = queryPlan.QueryPlan
+			}
+			result = strings.Join(names, "")
+			var planValue map[string]interface{}
+			_ = json.Unmarshal([]byte(result), &planValue)
+			if len(planValue) > 0 {
+				info := OceanBaseExplainInfo{}
+				_ = info.Unmarshal(planValue)
+				if info.Operator != "" {
+					rows = append(rows, ExplainInfo{Rows: info.EstRows})
+				}
+				for _, v := range planValue {
+					childInfo := OceanBaseExplainInfo{}
+					_ = childInfo.Unmarshal(v)
+					if childInfo.Operator != "" {
+						rows = append(rows, ExplainInfo{Rows: childInfo.EstRows})
+					}
 				}
 			}
 		}
