@@ -58,6 +58,9 @@ var (
 
 	// 匹配标识符,只能包含字母数字和下划线
 	regIdentified = regexp.MustCompile(`^[0-9a-zA-Z\_]*$`)
+
+	obVersionTimeStamp          = 0
+	ob3CheckModifyNullOrNotNull = 0
 )
 
 // var Keywords map[string]int = parser.GetKeywords()
@@ -1826,10 +1829,27 @@ func (s *session) mysqlServerVersion() {
 				} else {
 					s.appendErrorMsg(fmt.Sprintf("无法解析版本号:%s", value))
 				}
+
+				// OverWrite version num when connect to OceanBase
+				if s.dbType == DBTypeOceanBase {
+					versionNum := strings.Split(value, "-")[2]
+					if len(versionNum) > 0 {
+						version, _ := strconv.Atoi(versionNum[1:2])
+						s.dbVersion = version
+						s.dbFullVersion = versionNum[1:]
+					}
+				}
 				log.Debug("db version: ", s.dbVersion)
 			case "version_comment":
 				if strings.Contains(strings.ToLower(value), "oceanbase") {
 					s.dbType = DBTypeOceanBase
+					versionNum := strings.Split(value, " ")[1]
+					if len(versionNum) > 0 {
+						val, _ := strconv.Atoi(versionNum[:1])
+						s.dbVersion = val
+						s.dbFullVersion = versionNum
+						obVersionTimeStamp, _ = strconv.Atoi(strings.Split(value, " ")[2][10:20])
+					}
 				}
 			case "innodb_large_prefix":
 				emptyInnodbLargePrefix = false
@@ -2342,9 +2362,16 @@ func (s *session) checkTruncateTable(node *ast.TruncateTableStmt, sql string) {
 
 	t := node.Table
 
-	if !s.inc.EnableDropTable {
-		s.appendErrorNo(ER_CANT_DROP_TABLE, t.Name)
+	if !s.inc.EnableTruncateTable {
+		s.appendErrorNo(ER_CANT_TRUNCATE_TABLE)
 	} else {
+		if s.dbType == DBTypeOceanBase {
+			if s.dbVersion == 3 {
+				// Do Nothing, It's OnLine DDL under 3.x
+			} else if s.dbVersion > 3 {
+				// s.appendErrorNo(ER_CANT_TRUNCATE_TABLE)
+			}
+		}
 
 		if t.Schema.O == "" {
 			t.Schema = model.NewCIStr(s.dbName)
@@ -2367,8 +2394,16 @@ func (s *session) checkDropTable(node *ast.DropTableStmt, sql string) {
 	for _, t := range node.Tables {
 
 		if !s.inc.EnableDropTable {
-			s.appendErrorNo(ER_CANT_DROP_TABLE, t.Name)
+			s.appendErrorNo(ER_CANT_DROP_TABLE)
 			continue
+		} else {
+			if s.dbType == DBTypeOceanBase {
+				if s.dbVersion == 3 {
+					// Do Nothing, It's OnLine DDL under 3.x
+				} else if s.dbVersion > 3 {
+					// s.appendErrorNo(ER_CANT_DROP_TABLE)
+				}
+			}
 		}
 
 		if t.Schema.O == "" {
@@ -2801,13 +2836,13 @@ func (s *session) checkCreateTable(node *ast.CreateTableStmt, sql string) {
 					if s.inc.EnableSetCharset {
 						s.checkCharset(opt.StrValue)
 					} else {
-						s.appendErrorNo(ER_TABLE_CHARSET_MUST_NULL, node.Table.Name.O)
+						s.appendErrorNo(ER_TABLE_CHARSET_MUST_NULL)
 					}
 				case ast.TableOptionCollate:
 					if s.inc.EnableSetCollation {
 						s.checkCollation(opt.StrValue)
 					} else {
-						s.appendErrorNo(ErrTableCollationNotSupport, node.Table.Name.O)
+						s.appendErrorNo(ErrTableCollationNotSupport)
 					}
 				case ast.TableOptionComment:
 					if opt.StrValue != "" {
@@ -3148,14 +3183,20 @@ func (s *session) checkTableOptions(options []*ast.TableOption, table string, is
 			if s.inc.EnableSetCharset && s.dbType != DBTypeOceanBase {
 				s.checkCharset(opt.StrValue)
 			} else {
-				s.appendErrorNo(ER_TABLE_CHARSET_MUST_NULL, table)
+				if s.inc.CheckOfflineDDL && s.dbType == DBTypeOceanBase {
+					if s.dbVersion == 3 {
+						s.appendErrorNo(ER_NOT_SUPPORT_FEATURE_OR_FUNCTION_FOR_OB3)
+					} else if s.dbVersion > 3 {
+						s.appendErrorNo(ER_TABLE_CHARSET_MUST_NULL)
+					}
+				}
 			}
 			character = opt.StrValue
 		case ast.TableOptionCollate:
 			if s.inc.EnableSetCollation && s.dbType != DBTypeOceanBase {
 				s.checkCollation(opt.StrValue)
 			} else {
-				s.appendErrorNo(ErrTableCollationNotSupport, table)
+				s.appendErrorNo(ErrTableCollationNotSupport)
 			}
 			collation = opt.StrValue
 		case ast.TableOptionComment:
@@ -3534,6 +3575,9 @@ func (s *session) checkAlterTable(node *ast.AlterTableStmt, sql string, mergeOnl
 
 	var addColumn = 0
 	var addConstraint = 0
+	var changeColumn = 0
+	var modifyColumn = 0
+	var renameColumn = 0
 	for i, alter := range node.Specs {
 		switch alter.Tp {
 		case ast.AlterTableOption:
@@ -3563,6 +3607,7 @@ func (s *session) checkAlterTable(node *ast.AlterTableStmt, sql string, mergeOnl
 
 		case ast.AlterTableModifyColumn:
 			s.checkModifyColumn(table, alter)
+			modifyColumn += 1
 
 		case ast.AlterTableChangeColumn:
 			s.appendErrorNo(ErCantChangeColumn, alter.OldColumnName.String())
@@ -3572,6 +3617,7 @@ func (s *session) checkAlterTable(node *ast.AlterTableStmt, sql string, mergeOnl
 				s.appendErrorMsg("Can't execute this sql,the renamed columns' data maybe lost(pt-osc have a bug)!")
 			}
 			s.checkChangeColumn(table, alter)
+			changeColumn += 1
 
 		case ast.AlterTableRenameColumn:
 			if s.dbVersion < 80000 && s.dbType == DBTypeMysql {
@@ -3579,6 +3625,7 @@ func (s *session) checkAlterTable(node *ast.AlterTableStmt, sql string, mergeOnl
 			} else {
 				s.checkRenameColumn(table, alter)
 			}
+			renameColumn += 1
 
 		case ast.AlterTableRenameTable:
 			s.checkAlterTableRenameTable(table, alter)
@@ -3674,8 +3721,28 @@ func (s *session) checkAlterTable(node *ast.AlterTableStmt, sql string, mergeOnl
 
 	if s.dbType == DBTypeOceanBase && s.inc.CheckOfflineDDL {
 		if addColumn >= 1 && addConstraint >= 1 {
-			s.appendErrorNo(ER_CANT_ADD_COLUMNS_AND_CONSTRAINTS_IN_ONE_STATEMENT)
+			if s.dbVersion == 3 {
+				// DoNothing for 3.x
+			} else {
+				s.appendErrorNo(ER_CANT_ADD_COLUMNS_AND_CONSTRAINTS_IN_ONE_STATEMENT)
+			}
 		}
+	}
+
+	// 3.2.3bp10之前的版本 要对同一条语句有多个alter的语句做语法兼容性拦截
+	// 多条alter语句，只包含加列、改列类型，不含添加约束
+	if s.dbType == DBTypeOceanBase && s.inc.CheckOfflineDDL {
+		if addColumn+renameColumn > 1 && ob3CheckModifyNullOrNotNull > 0 {
+			if s.compareOBVersion(s.dbFullVersion, "3.2.3.3") < 0 {
+				s.appendErrorNo(ER_NOT_ALLOW_MULTI_ALTER_STATEMENT_IN_ONE_STATEMENT)
+			}
+			if s.compareOBVersion(s.dbFullVersion, "3.2.3.3") == 0 {
+				if obVersionTimeStamp != 0 && obVersionTimeStamp < 2023092816 {
+					s.appendErrorNo(ER_NOT_ALLOW_MULTI_ALTER_STATEMENT_IN_ONE_STATEMENT)
+				}
+			}
+		}
+		ob3CheckModifyNullOrNotNull = 0
 	}
 
 	s.checkMultiPartitionParts(node.Specs)
@@ -4096,20 +4163,32 @@ func (s *session) checkModifyColumn(t *TableInfo, c *ast.AlterTableSpec) {
 							isUnique = true
 						case ast.ColumnOptionAutoIncrement:
 							isAutoIncrement = true
+						case ast.ColumnOptionNotNull:
+							ob3CheckModifyNullOrNotNull += 1
+						case ast.ColumnOptionNull:
+
 						}
 					}
 
 					if isAutoIncrement {
 						if s.dbType == DBTypeOceanBase {
-							s.appendErrorNo(ER_CANT_MODIFY_AUTO_INCREMENT_COLUMN, nc.Name.Name.String())
-							break
+							if s.dbVersion == 3 {
+								s.appendErrorNo(ER_NOT_SUPPORT_FEATURE_OR_FUNCTION_FOR_OB3)
+							} else if s.dbVersion > 3 {
+								s.appendErrorNo(ER_CANT_MODIFY_AUTO_INCREMENT_COLUMN)
+								break
+							}
 						}
 					}
 
 					if isPrimary || isUnique {
 						if s.dbType == DBTypeOceanBase {
-							s.appendErrorNo(ER_CANT_MODIFY_PK_OR_UK_COLUMN, nc.Name.Name.String())
-							break
+							if s.dbVersion == 3 {
+								s.appendErrorNo(ER_NOT_SUPPORT_FEATURE_OR_FUNCTION_FOR_OB3)
+							} else if s.dbVersion > 3 {
+								s.appendErrorNo(ER_CANT_MODIFY_PK_OR_UK_COLUMN)
+								break
+							}
 						}
 					}
 				}
@@ -4129,8 +4208,7 @@ func (s *session) checkModifyColumn(t *TableInfo, c *ast.AlterTableSpec) {
 
 				if c.Position.Tp != ast.ColumnPositionNone {
 
-					s.appendErrorNo(ErCantChangeColumnPosition,
-						fmt.Sprintf("%s.%s", t.Name, nc.Name.Name))
+					s.appendErrorNo(ErCantChangeColumnPosition)
 
 					// 在新的快照上变更表结构
 					t := s.cacheTableSnapshot(t)
@@ -4274,8 +4352,7 @@ func (s *session) checkModifyColumn(t *TableInfo, c *ast.AlterTableSpec) {
 
 				if c.Position.Tp != ast.ColumnPositionNone {
 
-					s.appendErrorNo(ErCantChangeColumnPosition,
-						fmt.Sprintf("%s.%s", t.Name, nc.Name.Name))
+					s.appendErrorNo(ErCantChangeColumnPosition)
 
 					if c.Position.Tp == ast.ColumnPositionFirst {
 						tmp := make([]FieldInfo, 0, len(t.Fields))
@@ -4406,31 +4483,45 @@ func (s *session) checkModifyColumn(t *TableInfo, c *ast.AlterTableSpec) {
 				str := string([]byte(foundField.Type)[:length])
 				// 类型不一致
 				if !strings.Contains(fieldType, str) {
-					s.appendErrorNo(ER_CHANGE_COLUMN_TYPE,
-						fmt.Sprintf("%s.%s", t.Name, nc.Name.Name),
-						foundField.Type, fieldType)
-				} else if s.dbType == DBTypeOceanBase && GetDataTypeLength(fieldType)[0] >= GetDataTypeLength(foundField.Type)[0] {
+					s.appendErrorNo(ER_CHANGE_COLUMN_TYPE)
+				} else if s.dbType == DBTypeOceanBase {
 					if s.inc.CheckOfflineDDL {
-						s.appendErrorNo(ER_CHANGE_COLUMN_TYPE,
-							fmt.Sprintf("%s.%s", t.Name, nc.Name.Name),
-							foundField.Type, fieldType)
+						// s.appendErrorNo(ER_CHANGE_COLUMN_TYPE)
+						if s.dbVersion == 3 {
+							// 同为varchar
+							if strings.Contains(fieldType, "varchar") && strings.Contains(str, "varchar") {
+
+							} else {
+								s.appendErrorNo(ER_NOT_SUPPORT_FEATURE_OR_FUNCTION_FOR_OB3)
+							}
+
+						} else if s.dbVersion > 3 {
+						}
 					}
 				} else if GetDataTypeLength(fieldType)[0] < GetDataTypeLength(foundField.Type)[0] {
-					s.appendErrorNo(ER_CHANGE_COLUMN_TYPE,
-						fmt.Sprintf("%s.%s", t.Name, nc.Name.Name),
-						foundField.Type, fieldType)
+					s.appendErrorNo(ER_CHANGE_COLUMN_TYPE)
 				}
 			case mysql.TypeString:
 				str := string([]byte(foundField.Type)[:4])
 				// 类型不一致
 				if !strings.Contains(fieldType, str) {
-					s.appendErrorNo(ER_CHANGE_COLUMN_TYPE,
-						fmt.Sprintf("%s.%s", t.Name, nc.Name.Name),
-						foundField.Type, fieldType)
-				} else if GetDataTypeLength(fieldType)[0] < GetDataTypeLength(foundField.Type)[0] {
-					s.appendErrorNo(ER_CHANGE_COLUMN_TYPE,
-						fmt.Sprintf("%s.%s", t.Name, nc.Name.Name),
-						foundField.Type, fieldType)
+					if s.dbVersion == 3 {
+						s.appendErrorNo(ER_NOT_SUPPORT_FEATURE_OR_FUNCTION_FOR_OB3)
+					} else if s.dbVersion > 3 {
+						s.appendErrorNo(ER_CHANGE_COLUMN_TYPE)
+					}
+				} else if s.dbType == DBTypeOceanBase {
+					if s.dbVersion == 3 {
+						s.appendErrorNo(ER_NOT_SUPPORT_FEATURE_OR_FUNCTION_FOR_OB3)
+					} else if s.dbVersion > 3 {
+					}
+
+				} else if GetDataTypeLength(fieldType)[0] <= GetDataTypeLength(foundField.Type)[0] {
+					if s.dbVersion == 3 {
+						s.appendErrorNo(ER_NOT_SUPPORT_FEATURE_OR_FUNCTION_FOR_OB3)
+					} else if s.dbVersion > 3 {
+						s.appendErrorNo(ER_CHANGE_COLUMN_TYPE)
+					}
 				}
 			default:
 				// log.Info(fieldType, ":", foundField.Type)
@@ -4452,14 +4543,14 @@ func (s *session) checkModifyColumn(t *TableInfo, c *ast.AlterTableSpec) {
 
 				} else {
 					if s.dbType == DBTypeOceanBase && s.inc.CheckOfflineDDL {
-						s.appendErrorNo(ER_CANT_CHANGE_COLUMN_TYPE,
-							fmt.Sprintf("%s.%s", t.Name, nc.Name.Name),
-							foundField.Type, fieldType)
-						continue
+						if s.dbVersion == 3 {
+							s.appendErrorNo(ER_NOT_SUPPORT_FEATURE_OR_FUNCTION_FOR_OB3)
+						} else if s.dbVersion > 3 {
+							s.appendErrorNo(ER_CANT_CHANGE_COLUMN_TYPE)
+							continue
+						}
 					}
-					s.appendErrorNo(ER_CHANGE_COLUMN_TYPE,
-						fmt.Sprintf("%s.%s", t.Name, nc.Name.Name),
-						foundField.Type, fieldType)
+					s.appendErrorNo(ER_CHANGE_COLUMN_TYPE)
 				}
 			}
 		}
@@ -5186,8 +5277,11 @@ func (s *session) checkAlterTableDropIndex(t *TableInfo, indexName string) bool 
 func (s *session) checkDropPrimaryKey(t *TableInfo, c *ast.AlterTableSpec) {
 	log.Debug("checkDropPrimaryKey")
 	if s.inc.CheckOfflineDDL && s.dbType == DBTypeOceanBase {
-		s.appendErrorNo(ER_CANT_DROP_PRIMARY_KEY,
-			fmt.Sprintf("%s", t.Name))
+		if s.dbVersion == 3 {
+			s.appendErrorNo(ER_NOT_SUPPORT_FEATURE_OR_FUNCTION_FOR_OB3)
+		} else if s.dbVersion > 3 {
+			s.appendErrorNo(ER_CANT_DROP_PRIMARY_KEY)
+		}
 	}
 
 	s.checkAlterTableDropIndex(t, "PRIMARY")
@@ -5229,22 +5323,34 @@ func (s *session) checkAddColumn(t *TableInfo, c *ast.AlterTableSpec) {
 
 				if s.inc.CheckOfflineDDL && isAutoIncrement {
 					if s.dbType == DBTypeOceanBase {
-						s.appendErrorNo(ER_CANT_ADD_AUTO_INCREMENT_COLUMN, nc.Name.Name.String())
-						break
+						if s.dbVersion == 3 {
+							// Do Nothing, It's OnLine DDL under 3.x
+						} else if s.dbVersion > 3 {
+							s.appendErrorNo(ER_CANT_ADD_AUTO_INCREMENT_COLUMN)
+							break
+						}
 					}
 				}
 
 				if s.inc.CheckOfflineDDL && isStore != nil && *isStore {
 					if s.dbType == DBTypeOceanBase {
-						s.appendErrorNo(ER_CANT_ADD_STORED_GENERATED_COLUMN, nc.Name.Name.String())
-						break
+						if s.dbVersion == 3 {
+							// Do Nothing, It's OnLine DDL under 3.x
+						} else if s.dbVersion > 3 {
+							s.appendErrorNo(ER_CANT_ADD_STORED_GENERATED_COLUMN)
+							break
+						}
 					}
 				}
 
 				if isPrimary || isUnique {
 					if s.dbType == DBTypeOceanBase {
-						s.appendErrorNo(ER_CANT_ADD_PK_OR_UK_COLUMN, nc.Name.Name.String())
-						break
+						if s.dbVersion == 3 {
+							s.appendErrorNo(ER_NOT_SUPPORT_FEATURE_OR_FUNCTION_FOR_OB3)
+						} else if s.dbVersion > 3 {
+							s.appendErrorNo(ER_CANT_ADD_PK_OR_UK_COLUMN)
+							break
+						}
 					}
 					rows := t.Indexes
 					indexName := ""
@@ -5327,8 +5433,16 @@ func (s *session) checkAddColumn(t *TableInfo, c *ast.AlterTableSpec) {
 			}
 
 			if c.Position != nil && c.Position.Tp != ast.ColumnPositionNone {
-				s.appendErrorNo(ErCantChangeColumnPosition,
-					fmt.Sprintf("%s.%s", t.Name, nc.Name.Name))
+				if s.dbType == DBTypeOceanBase {
+					if s.dbVersion == 3 {
+						// Do Nothing, It's OnLine DDL under 3.x
+					} else if s.dbVersion > 3 {
+						s.appendErrorNo(ER_CANT_ADD_STORED_GENERATED_COLUMN)
+						break
+					}
+				} else {
+					s.appendErrorNo(ErCantChangeColumnPosition)
+				}
 			}
 
 			if s.opt.Execute {
@@ -5361,8 +5475,12 @@ func checkExistsColumns(t *TableInfo) (count int) {
 func (s *session) checkDropColumn(t *TableInfo, c *ast.AlterTableSpec) {
 	if s.dbType == DBTypeOceanBase {
 		if s.inc.CheckOfflineDDL {
-			s.appendErrorNo(ER_CANT_DROP_COLUMN, fmt.Sprintf("%s", c.OldColumnName.Name.O))
-			return
+			if s.dbVersion == 3 {
+				// Do Nothing, It's OnLine DDL under 3.x
+			} else if s.dbVersion > 3 {
+				s.appendErrorNo(ER_CANT_DROP_COLUMN)
+				return
+			}
 		}
 
 		for _, index := range t.Indexes {
@@ -7420,33 +7538,72 @@ func (s *session) getExplainInfo(sql string, sqlId string) {
 	var rows []ExplainInfo
 
 	if s.dbType == DBTypeOceanBase {
-		var plan OceanBaseQueryPlan
-		if err := s.rawScan(sql, &plan); err != nil {
-			if myErr, ok := err.(*mysqlDriver.MySQLError); ok {
-				s.appendErrorMsg(myErr.Message)
-				if newRecord != nil {
-					newRecord.appendErrorMessage(myErr.Message)
-				}
-			} else {
-				s.appendErrorMsg(err.Error())
-				if newRecord != nil {
-					newRecord.appendErrorMessage(err.Error())
+		if s.dbVersion <= 3 {
+			var plan OceanBaseQueryPlan
+			if err := s.rawScan(sql, &plan); err != nil {
+				if myErr, ok := err.(*mysqlDriver.MySQLError); ok {
+					s.appendErrorMsg(myErr.Message)
+					if newRecord != nil {
+						newRecord.appendErrorMessage(myErr.Message)
+					}
+				} else {
+					s.appendErrorMsg(err.Error())
+					if newRecord != nil {
+						newRecord.appendErrorMessage(err.Error())
+					}
 				}
 			}
-		}
-		var planValue map[string]interface{}
-		_ = json.Unmarshal([]byte(plan.QueryPlan), &planValue)
-		if len(planValue) > 0 {
-			info := OceanBaseExplainInfo{}
-			_ = info.Unmarshal(planValue)
-			if info.Operator != "" {
-				rows = append(rows, ExplainInfo{Rows: info.EstRows})
+			var planValue map[string]interface{}
+			_ = json.Unmarshal([]byte(plan.QueryPlan), &planValue)
+			if len(planValue) > 0 {
+				info := OceanBaseExplainInfo{}
+				_ = info.Unmarshal(planValue)
+				if info.Operator != "" {
+					rows = append(rows, ExplainInfo{Rows: info.EstRows})
+				}
+				for _, v := range planValue {
+					childInfo := OceanBaseExplainInfo{}
+					_ = childInfo.Unmarshal(v)
+					if childInfo.Operator != "" {
+						rows = append(rows, ExplainInfo{Rows: childInfo.EstRows})
+					}
+				}
 			}
-			for _, v := range planValue {
-				childInfo := OceanBaseExplainInfo{}
-				_ = childInfo.Unmarshal(v)
-				if childInfo.Operator != "" {
-					rows = append(rows, ExplainInfo{Rows: childInfo.EstRows})
+		} else {
+			var plan []OceanBaseQueryPlan
+			if err := s.rawScan(sql, &plan); err != nil {
+				if myErr, ok := err.(*mysqlDriver.MySQLError); ok {
+					s.appendErrorMsg(myErr.Message)
+					if newRecord != nil {
+						newRecord.appendErrorMessage(myErr.Message)
+					}
+				} else {
+					s.appendErrorMsg(err.Error())
+					if newRecord != nil {
+						newRecord.appendErrorMessage(err.Error())
+					}
+				}
+			}
+			var result string
+			names := make([]string, len(plan))
+			for i, queryPlan := range plan {
+				names[i] = queryPlan.QueryPlan
+			}
+			result = strings.Join(names, "")
+			var planValue map[string]interface{}
+			_ = json.Unmarshal([]byte(result), &planValue)
+			if len(planValue) > 0 {
+				info := OceanBaseExplainInfo{}
+				_ = info.Unmarshal(planValue)
+				if info.Operator != "" {
+					rows = append(rows, ExplainInfo{Rows: info.EstRows})
+				}
+				for _, v := range planValue {
+					childInfo := OceanBaseExplainInfo{}
+					_ = childInfo.Unmarshal(v)
+					if childInfo.Operator != "" {
+						rows = append(rows, ExplainInfo{Rows: childInfo.EstRows})
+					}
 				}
 			}
 		}
