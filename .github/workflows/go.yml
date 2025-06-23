@@ -10,94 +10,95 @@ on:
 jobs:
   build:
     name: Build
-    runs-on: centos 7.9
+    runs-on: ubuntu-latest
+    container:
+      image: centos:7.9.2009
+      options: >-
+        --privileged  # 允许容器内运行服务（如 MySQL）
+        --env="http_proxy=$http_proxy"
+        --env="https_proxy=$https_proxy"
     steps:
-      - name: Stop default MySQL
+      - name: Stop default MySQL (容器内无 systemd，此步骤可删除)
         run: |
-          sudo systemctl stop mysql
+          echo "CentOS 容器中无需 systemctl 停止 MySQL"
 
       - uses: actions/checkout@v3
         with:
-          # Disabling shallow clone is recommended for improving relevancy of reporting
           fetch-depth: 0
-      - name: Install MySQL Service
-        uses: shogo82148/actions-setup-mysql@v1
-        with:
-          mysql-version: "5.7"
-          root-password: "root"
-          my-cnf: |
-            [mysqld]
-            innodb_log_file_size=256MB
-            innodb_buffer_pool_size=512MB
-            max_allowed_packet=16MB
-            max_connections=500
-            log-bin=1
-            server_id=222
-            innodb-large-prefix=1
-            character_set_server=utf8mb4
-            lower_case_table_names=1
-            binlog-format = row
-            gtid-mode = ON
-            enforce_gtid_consistency = ON
-      - run: mysql -uroot -p'root' -e 'SELECT version()'
 
-      - name: Show MySQL Variables
-        run: mysql -uroot -p'root' -e "show variables where Variable_name in ('server_id','log_bin','lower_case_table_names','version');"
-
-      - name: Init MySQL Database and User
+      - name: Install MySQL
         run: |
-          export MYSQL_PWD=root
-          mysql -uroot -e "create database if not exists test DEFAULT CHARACTER SET utf8;create database if not exists test_inc DEFAULT CHARACTER SET utf8;create user test@'127.0.0.1' identified by 'test';"
-          mysql -uroot -e "grant all on *.* to test@'127.0.0.1';FLUSH PRIVILEGES;"
-          mysql -uroot -p'root' -e "show databases;show variables like 'explicit_defaults_for_timestamp';"
+          # 安装 MySQL 依赖
+          sudo yum install -y https://dev.mysql.com/get/mysql80-community-release-el7-7.noarch.rpm
+          sudo yum install -y mysql-community-server
+          # 启动 MySQL
+          sudo mysqld_safe --user=mysql &
+          # 获取初始密码
+          sleep 10
+          INIT_PASSWORD=$(sudo grep 'temporary password' /var/log/mysqld.log | awk '{print $NF}')
+          echo "Initial MySQL password: $INIT_PASSWORD"
+          # 修改密码
+          sudo mysql -uroot -p"$INIT_PASSWORD" -e "ALTER USER 'root'@'localhost' IDENTIFIED BY 'root';"
+          # 配置 MySQL
+          sudo tee /etc/my.cnf <<EOF
+  [mysqld]
+  innodb_log_file_size=256MB
+  innodb_buffer_pool_size=512MB
+  max_allowed_packet=16MB
+  max_connections=500
+  log-bin=1
+  server_id=222
+  character_set_server=utf8mb4
+  lower_case_table_names=1
+  binlog-format = row
+  gtid-mode = ON
+  enforce_gtid_consistency = ON
+  EOF
+  sudo systemctl restart mysqld
 
-      - name: Waiting for MySQL to be ready
-        run: |
-          sleep 2
-          for i in `seq 1 10`;
-          do
-            nc -z 127.0.0.1 3306 && echo Success && exit 0
-            echo -n .
-            sleep 2
-          done
-          echo Failed waiting for MySQL && exit 1
+- name: Verify MySQL Installation
+  run: |
+    mysql -uroot -p'root' -e 'SELECT version();'
+    mysql -uroot -p'root' -e "SHOW VARIABLES WHERE Variable_name IN ('server_id', 'log_bin', 'lower_case_table_names', 'version');"
 
-      - name: Set up Go
-        uses: actions/setup-go@v2
-        with:
-          go-version: 1.22.1
-        id: go
+- name: Create Databases and User
+  run: |
+    mysql -uroot -p'root' -e "CREATE DATABASE IF NOT EXISTS test DEFAULT CHARACTER SET utf8;"
+    mysql -uroot -p'root' -e "CREATE DATABASE IF NOT EXISTS test_inc DEFAULT CHARACTER SET utf8;"
+    mysql -uroot -p'root' -e "CREATE USER test@'127.0.0.1' IDENTIFIED BY 'test';"
+    mysql -uroot -p'root' -e "GRANT ALL ON *.* TO test@'127.0.0.1'; FLUSH PRIVILEGES;"
 
-      - name: Check out code
-        uses: actions/checkout@v2
+- name: Wait for MySQL to be ready
+  run: |
+    for i in {1..10}; do
+      nc -z 127.0.0.1 3306 && echo "MySQL is ready" && exit 0
+      echo -n "."
+      sleep 2
+    done
+    echo "Failed to connect to MySQL" && exit 1
 
-      - name: Install pt-online-schema-change
-        run: |
-          sudo cp ./bin/pt-online-schema-change  /usr/local/bin/pt-online-schema-change
-          sudo chmod +x /usr/local/bin/pt-online-schema-change
-          sudo apt-get install libdbi-perl libdbd-mysql-perl
+- name: Set up Go
+  uses: actions/setup-go@v2
+  with:
+    go-version: 1.22.1
+  id: go
 
-      - name: Install gh-ost
-        run: |
-          sudo wget -O gh-ost.tar.gz https://github.com/github/gh-ost/releases/download/v1.1.0/gh-ost-binary-linux-20200828140552.tar.gz
-          sudo tar -zxvf gh-ost.tar.gz -C /usr/local/bin/
-          sudo chmod +x /usr/local/bin/gh-ost
+- name: Check out code
+  uses: actions/checkout@v2
 
-      - name: "Build & Test"
-        run: |
-          # rm -f go.sum
-          sudo chmod +x cmd/explaintest/run-tests.sh
-          make checklist gotest
+- name: Install pt-online-schema-change
+  run: |
+    sudo cp ./bin/pt-online-schema-change /usr/local/bin/
+    sudo chmod +x /usr/local/bin/pt-online-schema-change
+    sudo yum install -y perl-DBI perl-DBD-MySQL
 
-      # - name: Analyze with SonarCloud
-      #   uses: sonarsource/sonarcloud-github-action@master
-      #   env:
-      #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      #     SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+- name: Install gh-ost
+  run: |
+    sudo wget -O gh-ost.tar.gz https://github.com/github/gh-ost/releases/download/v1.1.0/gh-ost-binary-linux-20200828140552.tar.gz
+    sudo tar -zxvf gh-ost.tar.gz -C /usr/local/bin/
+    sudo chmod +x /usr/local/bin/gh-ost
 
-      # - name: Send coverage
-      #   env:
-      #     TRAVIS_COVERAGE: 1
-      #     GOVERALLS_SERVICE: 1
-      #     COVERALLS_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      #   run: make dev upload-coverage
+- name: Build & Test
+  run: |
+    sudo chmod +x cmd/explaintest/run-tests.sh
+    make checklist gotest
