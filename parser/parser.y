@@ -6234,10 +6234,11 @@ TableRef:
 	}
 
 TableFactor:
-	TableName TableAsNameOpt IndexHintListOpt
+	TableName TableAsNameOpt PartitionNameListOpt IndexHintListOpt
 	{
 		tn := $1.(*ast.TableName)
-		tn.IndexHints = $3.([]*ast.IndexHint)
+		tn.PartitionNames = $3.([]model.CIStr)
+		tn.IndexHints = $4.([]*ast.IndexHint)
 		$$ = &ast.TableSource{Source: tn, AsName: $2.(model.CIStr)}
 	}
 |	'(' SelectStmt ')' TableAsName
