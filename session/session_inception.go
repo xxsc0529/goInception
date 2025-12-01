@@ -2856,6 +2856,8 @@ func (s *session) checkCreateTable(node *ast.CreateTableStmt, sql string) {
 					if opt.UintValue > 1 {
 						s.appendErrorNo(ER_INC_INIT_ERR)
 					}
+				case ast.TableOptionTableMode:
+					s.checkTableMode(opt.StrValue)
 				}
 			}
 
@@ -3216,6 +3218,8 @@ func (s *session) checkTableOptions(options []*ast.TableOption, table string, is
 			} else {
 				s.appendErrorNo(ER_NOT_SUPPORTED_YET)
 			}
+		case ast.TableOptionTableMode:
+			s.checkTableMode(opt.StrValue)
 		default:
 			s.appendErrorNo(ER_NOT_SUPPORTED_ALTER_OPTION)
 		}
@@ -4472,8 +4476,8 @@ func (s *session) checkModifyColumn(t *TableInfo, c *ast.AlterTableSpec) {
 				mysql.TypeVarchar,
 				mysql.TypeVarString:
 				/*
-				这里如果foundField.Type的长度不足7位，直接取[:7],会导致数据越界
-				所以如果foundField.Type长度小于7位，以实际长度进行截取，如果大于等于7位，就按照7位进行截取
+					这里如果foundField.Type的长度不足7位，直接取[:7],会导致数据越界
+					所以如果foundField.Type长度小于7位，以实际长度进行截取，如果大于等于7位，就按照7位进行截取
 				*/
 				length := 7
 				legnthOfFoundFieldType := len(foundField.Type)
@@ -7425,6 +7429,16 @@ func (s *session) checkCollation(collation string) bool {
 		return false
 	}
 	return true
+}
+
+func (s *session) checkTableMode(mode string) bool {
+	switch strings.ToUpper(mode) {
+	case "NORMAL", "QUEUING", "MODERATE", "SUPER", "EXTREME":
+		return true
+	default:
+		s.appendErrorMsg(fmt.Sprintf("TABLE_MODE value '%s' is invalid, supported values: NORMAL, QUEUING, MODERATE, SUPER, EXTREME", mode))
+		return false
+	}
 }
 
 func (s *session) checkEngine(engine string) bool {

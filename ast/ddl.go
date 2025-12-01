@@ -1878,6 +1878,7 @@ const (
 	TableOptionTableCheckSum
 	TableOptionUnion
 	TableOptionEncryption
+	TableOptionTableMode
 	TableOptionTableGroup
 	TableOptionPlacementPrimaryRegion       = TableOptionType(PlacementOptionPrimaryRegion)
 	TableOptionPlacementRegions             = TableOptionType(PlacementOptionRegions)
@@ -2130,6 +2131,10 @@ func (n *TableOption) Restore(ctx *format.RestoreCtx) error {
 		ctx.WritePlain(")")
 	case TableOptionEncryption:
 		ctx.WriteKeyWord("ENCRYPTION ")
+		ctx.WritePlain("= ")
+		ctx.WriteString(n.StrValue)
+	case TableOptionTableMode:
+		ctx.WriteKeyWord("TABLE_MODE ")
 		ctx.WritePlain("= ")
 		ctx.WriteString(n.StrValue)
 	case TableOptionTableGroup:

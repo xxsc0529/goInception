@@ -225,6 +225,7 @@ import (
 	straightJoin      "STRAIGHT_JOIN"
 	tableKwd          "TABLE"
 	tablegroup        "TABLEGROUP"
+	tableMode         "TABLE_MODE"
 	template          "TEMPLATE"
 	stored            "STORED"
 	terminated        "TERMINATED"
@@ -971,6 +972,7 @@ import (
 	LinearOpt         "linear or empty"
 	FieldsOrColumns   "Fields or columns"
 	GetFormatSelector "{DATE|DATETIME|TIME|TIMESTAMP}"
+	TableModeValue    "TABLE_MODE value"
 
 %type	<ident>
 	ODBCDateTimeType                "ODBC type keywords for date and time literals"
@@ -7795,6 +7797,20 @@ TableOption:
 |	SetOpt "TABLEGROUP" EqOpt StringName
 	{
 		$$ = &ast.TableOption{Tp: ast.TableOptionTableGroup, StrValue: $4.(string)}
+	}
+|	SetOpt "TABLE_MODE" EqOpt TableModeValue
+	{
+		$$ = &ast.TableOption{Tp: ast.TableOptionTableMode, StrValue: $4}
+	}
+
+TableModeValue:
+	stringLit
+	{
+		$$ = strings.ToUpper($1)
+	}
+|	Identifier
+	{
+		$$ = strings.ToUpper($1)
 	}
 
 StatsPersistentVal:

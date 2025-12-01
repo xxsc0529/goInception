@@ -495,6 +495,7 @@ var tokenMap = map[string]int{
 	"SYSTEM_TIME":              systemTime,
 	"TABLE":                    tableKwd,
 	"TABLEGROUP":               tablegroup,
+	"TABLE_MODE":               tableMode,
 	"TABLEGROUP_ID":            tablegroupId,
 	"TABLEGROUPS":              tablegroups,
 	"TABLES":                   tables,
