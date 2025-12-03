@@ -3173,7 +3173,7 @@ func (s *session) checkCreateTable(node *ast.CreateTableStmt, sql string) {
 func (s *session) checkTableOptions(options []*ast.TableOption, table string, isCreate bool) {
 	var character, collation string
 	for _, opt := range options {
-		log.Errorf("opt: %#v", opt)
+		log.Debugf("opt: %#v", opt)
 		switch opt.Tp {
 		case ast.TableOptionEngine:
 			if s.inc.EnableSetEngine {
@@ -3219,6 +3219,7 @@ func (s *session) checkTableOptions(options []*ast.TableOption, table string, is
 				s.appendErrorNo(ER_NOT_SUPPORTED_YET)
 			}
 		case ast.TableOptionTableMode:
+			// only ob support
 			s.checkTableMode(opt.StrValue)
 		default:
 			s.appendErrorNo(ER_NOT_SUPPORTED_ALTER_OPTION)
