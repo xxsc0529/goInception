@@ -280,6 +280,7 @@ import (
 	binding                "BINDING"
 	binlog                 "BINLOG"
 	bitType                "BIT"
+	blockSize              "BLOCK_SIZE"
 	booleanType            "BOOLEAN"
 	boolType               "BOOL"
 	btree                  "BTREE"
@@ -383,6 +384,7 @@ import (
 	partitioning           "PARTITIONING"
 	password               "PASSWORD"
 	partitions             "PARTITIONS"
+	pctfree                "PCTFREE"
 	pipesAsOr
 	plugins                "PLUGINS"
 	preSplitRegions        "PRE_SPLIT_REGIONS"
@@ -402,6 +404,7 @@ import (
 	reorganize             "REORGANIZE"
 	repair                 "REPAIR"
 	repeatable             "REPEATABLE"
+	replicaNum             "REPLICA_NUM"
 	replication            "REPLICATION"
 	reverse                "REVERSE"
 	rollback               "ROLLBACK"
@@ -436,6 +439,7 @@ import (
 	tablegroups            "TABLEGROUPS"
 	tables                 "TABLES"
 	tablespace             "TABLESPACE"
+	tabletSize             "TABLET_SIZE"
 	temporary              "TEMPORARY"
 	temptable              "TEMPTABLE"
 	textType               "TEXT"
@@ -449,6 +453,7 @@ import (
 	tp                     "TYPE"
 	uncommitted            "UNCOMMITTED"
 	unknown                "UNKNOWN"
+	useBloomFilter         "USE_BLOOM_FILTER"
 	user                   "USER"
 	validation             "VALIDATION"
 	undefined              "UNDEFINED"
@@ -973,6 +978,9 @@ import (
 	FieldsOrColumns   "Fields or columns"
 	GetFormatSelector "{DATE|DATETIME|TIME|TIMESTAMP}"
 	TableModeValue    "TABLE_MODE value"
+
+%type	<item>
+	BoolLiteral "Boolean literal"
 
 %type	<ident>
 	ODBCDateTimeType                "ODBC type keywords for date and time literals"
@@ -4480,6 +4488,7 @@ UnReservedKeyword:
 |	"BOOLEAN"
 |	"BTREE"
 |	"BYTE"
+|	"BLOCK_SIZE"
 |	"CLEANUP"
 |	"CHARSET"
 |	"COLUMNS"
@@ -4528,6 +4537,7 @@ UnReservedKeyword:
 |	"OFFSET"
 |	"PARSER"
 |	"PASSWORD" %prec lowerThanEq
+|	"PCTFREE"
 |	"PREPARE"
 |	"PRE_SPLIT_REGIONS"
 |	"QUICK"
@@ -4546,6 +4556,7 @@ UnReservedKeyword:
 |	"TABLEGROUPS"
 |	"TABLES"
 |	"TABLESPACE"
+|	"TABLET_SIZE"
 |	"TEXT"
 |	"THAN"
 |	"TIME" %prec lowerThanStringLitToken
@@ -4562,6 +4573,7 @@ UnReservedKeyword:
 |	"ANY"
 |	"SOME"
 |	"USER"
+|	"USE_BLOOM_FILTER"
 |	"IDENTIFIED"
 |	"COLLATION"
 |	"COMMENT"
@@ -4630,6 +4642,7 @@ UnReservedKeyword:
 |	"MAX_UPDATES_PER_HOUR"
 |	"MAX_USER_CONNECTIONS"
 |	"REPLICATION"
+|	"REPLICA_NUM"
 |	"CLIENT"
 |	"SLAVE"
 |	"RELOAD"
@@ -7801,6 +7814,36 @@ TableOption:
 |	SetOpt "TABLE_MODE" EqOpt TableModeValue
 	{
 		$$ = &ast.TableOption{Tp: ast.TableOptionTableMode, StrValue: $4}
+	}
+|	"REPLICA_NUM" EqOpt LengthNum
+	{
+		$$ = &ast.TableOption{Tp: ast.TableOptionReplicaNum, UintValue: $3.(uint64)}
+	}
+|	"BLOCK_SIZE" EqOpt LengthNum
+	{
+		$$ = &ast.TableOption{Tp: ast.TableOptionBlockSize, UintValue: $3.(uint64)}
+	}
+|	"USE_BLOOM_FILTER" EqOpt BoolLiteral
+	{
+		$$ = &ast.TableOption{Tp: ast.TableOptionUseBloomFilter, BoolValue: $3.(bool)}
+	}
+|	"TABLET_SIZE" EqOpt LengthNum
+	{
+		$$ = &ast.TableOption{Tp: ast.TableOptionTabletSize, UintValue: $3.(uint64)}
+	}
+|	"PCTFREE" EqOpt LengthNum
+	{
+		$$ = &ast.TableOption{Tp: ast.TableOptionPctFree, UintValue: $3.(uint64)}
+	}
+
+BoolLiteral:
+	"TRUE"
+	{
+		$$ = true
+	}
+|	"FALSE"
+	{
+		$$ = false
 	}
 
 TableModeValue:
