@@ -3274,6 +3274,84 @@ SubPartitionOpt:
 		method.Num = $4.(uint64)
 		$$ = method
 	}
+|	"SUBPARTITION" "BY" "RANGE" '(' Expression ')'
+	{
+		$$ = &ast.PartitionMethod{
+			Tp:   model.PartitionTypeRange,
+			Expr: $5.(ast.ExprNode),
+		}
+	}
+|	"SUBPARTITION" "BY" "RANGE" "COLUMNS" '(' ColumnNameList ')'
+	{
+		$$ = &ast.PartitionMethod{
+			Tp:          model.PartitionTypeRange,
+			ColumnNames: $6.([]*ast.ColumnName),
+		}
+	}
+|	"SUBPARTITION" "BY" "LIST" '(' Expression ')'
+	{
+		$$ = &ast.PartitionMethod{
+			Tp:   model.PartitionTypeList,
+			Expr: $5.(ast.ExprNode),
+		}
+	}
+|	"SUBPARTITION" "BY" "LIST" "COLUMNS" '(' ColumnNameList ')'
+	{
+		$$ = &ast.PartitionMethod{
+			Tp:          model.PartitionTypeList,
+			ColumnNames: $6.([]*ast.ColumnName),
+		}
+	}
+|	"SUBPARTITION" "BY" "RANGE" '(' Expression ')' "SUBPARTITION" "TEMPLATE" '(' SubPartDefinitionList ')'
+	{
+		$$ = &ast.PartitionMethod{
+			Tp:                      model.PartitionTypeRange,
+			Expr:                    $5.(ast.ExprNode),
+			SubPartitionDefinitions: $10.([]*ast.SubPartitionDefinition),
+		}
+	}
+|	"SUBPARTITION" "BY" "RANGE" "COLUMNS" '(' ColumnNameList ')' "SUBPARTITION" "TEMPLATE" '(' SubPartDefinitionList ')'
+	{
+		$$ = &ast.PartitionMethod{
+			Tp:                      model.PartitionTypeRange,
+			ColumnNames:             $6.([]*ast.ColumnName),
+			SubPartitionDefinitions: $11.([]*ast.SubPartitionDefinition),
+		}
+	}
+|	"SUBPARTITION" "BY" "LIST" '(' Expression ')' "SUBPARTITION" "TEMPLATE" '(' SubPartDefinitionList ')'
+	{
+		$$ = &ast.PartitionMethod{
+			Tp:                      model.PartitionTypeList,
+			Expr:                    $5.(ast.ExprNode),
+			SubPartitionDefinitions: $10.([]*ast.SubPartitionDefinition),
+		}
+	}
+|	"SUBPARTITION" "BY" "LIST" "COLUMNS" '(' ColumnNameList ')' "SUBPARTITION" "TEMPLATE" '(' SubPartDefinitionList ')'
+	{
+		$$ = &ast.PartitionMethod{
+			Tp:                      model.PartitionTypeList,
+			ColumnNames:             $6.([]*ast.ColumnName),
+			SubPartitionDefinitions: $11.([]*ast.SubPartitionDefinition),
+		}
+	}
+|	"SUBPARTITION" "BY" LinearOpt "HASH" '(' Expression ')' "SUBPARTITION" "TEMPLATE" '(' SubPartDefinitionList ')'
+	{
+		$$ = &ast.PartitionMethod{
+			Tp:                      model.PartitionTypeHash,
+			Linear:                  len($3) != 0,
+			Expr:                    $6.(ast.ExprNode),
+			SubPartitionDefinitions: $11.([]*ast.SubPartitionDefinition),
+		}
+	}
+|	"SUBPARTITION" "BY" LinearOpt "KEY" PartitionKeyAlgorithmOpt '(' ColumnNameListOpt ')' "SUBPARTITION" "TEMPLATE" '(' SubPartDefinitionList ')'
+	{
+		$$ = &ast.PartitionMethod{
+			Tp:                      model.PartitionTypeKey,
+			Linear:                  len($3) != 0,
+			ColumnNames:             $7.([]*ast.ColumnName),
+			SubPartitionDefinitions: $12.([]*ast.SubPartitionDefinition),
+		}
+	}
 
 SubPartitionNumOpt:
 	{
@@ -3356,11 +3434,17 @@ SubPartDefinitionList:
 	}
 
 SubPartDefinition:
-	"SUBPARTITION" Identifier PartDefOptionList
+	"SUBPARTITION" Identifier PartDefValuesOpt PartDefOptionList
 	{
+		clause := $3.(ast.PartitionDefinitionClause)
+		// If clause is PartitionDefinitionClauseNone, set it to nil
+		if _, ok := clause.(*ast.PartitionDefinitionClauseNone); ok {
+			clause = nil
+		}
 		$$ = &ast.SubPartitionDefinition{
 			Name:    model.NewCIStr($2),
-			Options: $3.([]*ast.TableOption),
+			Clause:  clause,
+			Options: $4.([]*ast.TableOption),
 		}
 	}
 
@@ -3441,6 +3525,10 @@ PartDefValuesOpt:
 			}
 		}
 		$$ = &ast.PartitionDefinitionClauseIn{Values: values}
+	}
+|	"VALUES" "IN" '(' "DEFAULT" ')'
+	{
+		$$ = &ast.PartitionDefinitionClauseIn{}
 	}
 |	"HISTORY"
 	{
