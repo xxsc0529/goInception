@@ -1886,6 +1886,7 @@ const (
 	TableOptionUseBloomFilter
 	TableOptionTabletSize
 	TableOptionPctFree
+	TableOptionDynamicPartitionPolicy
 	TableOptionPlacementPrimaryRegion       = TableOptionType(PlacementOptionPrimaryRegion)
 	TableOptionPlacementRegions             = TableOptionType(PlacementOptionRegions)
 	TableOptionPlacementFollowerCount       = TableOptionType(PlacementOptionFollowerCount)
@@ -2171,6 +2172,11 @@ func (n *TableOption) Restore(ctx *format.RestoreCtx) error {
 		ctx.WriteKeyWord("PCTFREE ")
 		ctx.WritePlain("= ")
 		ctx.WritePlainf("%d", n.UintValue)
+	case TableOptionDynamicPartitionPolicy:
+		ctx.WriteKeyWord("DYNAMIC_PARTITION_POLICY ")
+		ctx.WritePlain("(")
+		ctx.WritePlain(n.StrValue)
+		ctx.WritePlain(")")
 	case TableOptionPlacementPrimaryRegion, TableOptionPlacementRegions, TableOptionPlacementFollowerCount, TableOptionPlacementLeaderConstraints, TableOptionPlacementLearnerCount, TableOptionPlacementVoterCount, TableOptionPlacementSchedule, TableOptionPlacementConstraints, TableOptionPlacementFollowerConstraints, TableOptionPlacementVoterConstraints, TableOptionPlacementLearnerConstraints, TableOptionPlacementPolicy:
 		placementOpt := PlacementOption{
 			Tp:        PlacementOptionType(n.Tp),

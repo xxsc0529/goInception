@@ -324,6 +324,7 @@ import (
 	do                     "DO"
 	duplicate              "DUPLICATE"
 	dynamic                "DYNAMIC"
+	dynamicPartitionPolicy "DYNAMIC_PARTITION_POLICY"
 	enable                 "ENABLE"
 	end                    "END"
 	engine                 "ENGINE"
@@ -698,6 +699,9 @@ import (
 	ConstraintKeywordOpt          "Constraint Keyword or empty"
 	CreateTableOptionListOpt      "create table option list opt"
 	CreateTableSelectOpt          "Select/Union statement in CREATE TABLE ... SELECT"
+	DynamicPartitionPolicyInner   "dynamic partition policy option list"
+	DynamicPartitionPolicyPair    "dynamic partition policy option pair"
+	DynamicPartitionPolicyValue   "dynamic partition policy value"
 	CreateViewSelectOpt           "Select/Union statement in CREATE VIEW ... AS SELECT"
 	DatabaseOption                "CREATE Database specification"
 	DatabaseOptionList            "CREATE Database specification list"
@@ -4699,6 +4703,7 @@ UnReservedKeyword:
 |	"DO"
 |	"DUPLICATE"
 |	"DYNAMIC"
+|	"DYNAMIC_PARTITION_POLICY"
 |	"END"
 |	"ENGINE"
 |	"ENGINES"
@@ -8020,6 +8025,44 @@ TableOption:
 |	"PCTFREE" EqOpt LengthNum
 	{
 		$$ = &ast.TableOption{Tp: ast.TableOptionPctFree, UintValue: $3.(uint64)}
+	}
+|	"DYNAMIC_PARTITION_POLICY" EqOpt '(' DynamicPartitionPolicyInner ')'
+	{
+		$$ = &ast.TableOption{Tp: ast.TableOptionDynamicPartitionPolicy, StrValue: $4.(string)}
+	}
+
+DynamicPartitionPolicyInner:
+	DynamicPartitionPolicyPair
+	{
+		$$ = $1.(string)
+	}
+|	DynamicPartitionPolicyInner ',' DynamicPartitionPolicyPair
+	{
+		$$ = $1.(string) + ", " + $3.(string)
+	}
+
+DynamicPartitionPolicyPair:
+	Identifier EqOpt DynamicPartitionPolicyValue
+	{
+		$$ = $1 + " = " + $3.(string)
+	}
+
+DynamicPartitionPolicyValue:
+	stringLit
+	{
+		$$ = "'" + strings.Replace($1, "'", "''", -1) + "'"
+	}
+|	BoolLiteral
+	{
+		if $1.(bool) {
+			$$ = "true"
+		} else {
+			$$ = "false"
+		}
+	}
+|	Identifier
+	{
+		$$ = $1
 	}
 
 BoolLiteral:

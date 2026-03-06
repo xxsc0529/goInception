@@ -250,6 +250,7 @@ var tokenMap = map[string]int{
 	"DUAL":                     dual,
 	"DUPLICATE":                duplicate,
 	"DYNAMIC":                  dynamic,
+	"DYNAMIC_PARTITION_POLICY": dynamicPartitionPolicy,
 	"ELSE":                     elseKwd,
 	"ENABLE":                   enable,
 	"ENCLOSED":                 enclosed,
