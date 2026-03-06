@@ -3345,12 +3345,18 @@ var (
 
 type SubPartitionDefinition struct {
 	Name    model.CIStr
+	Clause  PartitionDefinitionClause
 	Options []*TableOption
 }
 
 func (spd *SubPartitionDefinition) Restore(ctx *RestoreCtx) error {
 	ctx.WriteKeyWord("SUBPARTITION ")
 	ctx.WriteName(spd.Name.O)
+	if spd.Clause != nil {
+		if err := spd.Clause.restore(ctx); err != nil {
+			return errors.Annotate(err, "An error occurred while restore SubPartitionDefinition.Clause")
+		}
+	}
 	for i, opt := range spd.Options {
 		ctx.WritePlain(" ")
 		if err := opt.Restore(ctx); err != nil {
@@ -3618,6 +3624,9 @@ type PartitionMethod struct {
 
 	// Num is the number of (sub)partitions required by the method.
 	Num uint64
+
+	// SubPartitionDefinitions stores the SUBPARTITION TEMPLATE definitions
+	SubPartitionDefinitions []*SubPartitionDefinition
 }
 
 // Restore implements the Node interface
@@ -3698,6 +3707,11 @@ func (n *PartitionMethod) acceptInPlace(v Visitor) bool {
 			return false
 		}
 		n.Unit = unit.(*ValueExpr)
+	}
+	for _, spd := range n.SubPartitionDefinitions {
+		if spd.Clause != nil && !spd.Clause.acceptInPlace(v) {
+			return false
+		}
 	}
 	return true
 }
@@ -3782,7 +3796,19 @@ func (n *PartitionOptions) Restore(ctx *RestoreCtx) error {
 		if err := n.Sub.Restore(ctx); err != nil {
 			return errors.Annotate(err, "An error occurred while restore PartitionOptions.Sub")
 		}
-		if n.Sub.Num > 0 {
+		if len(n.Sub.SubPartitionDefinitions) > 0 {
+			ctx.WriteKeyWord(" SUBPARTITION TEMPLATE ")
+			ctx.WritePlain("(")
+			for i, spd := range n.Sub.SubPartitionDefinitions {
+				if i > 0 {
+					ctx.WritePlain(",")
+				}
+				if err := spd.Restore(ctx); err != nil {
+					return errors.Annotatef(err, "An error occurred while restore PartitionOptions.Sub.SubPartitionDefinitions[%d]", i)
+				}
+			}
+			ctx.WritePlain(")")
+		} else if n.Sub.Num > 0 {
 			ctx.WriteKeyWord(" SUBPARTITIONS ")
 			ctx.WritePlainf("%d", n.Sub.Num)
 		}

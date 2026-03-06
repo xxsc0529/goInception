@@ -26,6 +26,7 @@
 package parser
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -3163,6 +3164,17 @@ PartitionOpt:
 		method := $3.(*ast.PartitionMethod)
 		method.Num = $4.(uint64)
 		sub, _ := $5.(*ast.PartitionMethod)
+		// If subpartition method has Num set AND SubPartitionDefinitions is set
+		// (indicating PARTITIONS N after SUBPARTITION TEMPLATE), use it as the main
+		// partition number and clear it from sub
+		if sub != nil && sub.Num > 0 && len(sub.SubPartitionDefinitions) > 0 {
+			if method.Num > 0 {
+				yylex.AppendError(errors.New("Duplicate PARTITIONS clause"))
+				return 1
+			}
+			method.Num = sub.Num
+			sub.Num = 0
+		}
 		defs, _ := $6.([]*ast.PartitionDefinition)
 		opt := &ast.PartitionOptions{
 			PartitionMethod: *method,
@@ -3274,6 +3286,170 @@ SubPartitionOpt:
 		method.Num = $4.(uint64)
 		$$ = method
 	}
+|	"SUBPARTITION" "BY" "RANGE" '(' Expression ')'
+	{
+		$$ = &ast.PartitionMethod{
+			Tp:   model.PartitionTypeRange,
+			Expr: $5.(ast.ExprNode),
+		}
+	}
+|	"SUBPARTITION" "BY" "RANGE" "COLUMNS" '(' ColumnNameList ')'
+	{
+		$$ = &ast.PartitionMethod{
+			Tp:          model.PartitionTypeRange,
+			ColumnNames: $6.([]*ast.ColumnName),
+		}
+	}
+|	"SUBPARTITION" "BY" "LIST" '(' Expression ')'
+	{
+		$$ = &ast.PartitionMethod{
+			Tp:   model.PartitionTypeList,
+			Expr: $5.(ast.ExprNode),
+		}
+	}
+|	"SUBPARTITION" "BY" "LIST" "COLUMNS" '(' ColumnNameList ')'
+	{
+		$$ = &ast.PartitionMethod{
+			Tp:          model.PartitionTypeList,
+			ColumnNames: $6.([]*ast.ColumnName),
+		}
+	}
+|	"SUBPARTITION" "BY" "RANGE" '(' Expression ')' "SUBPARTITION" "TEMPLATE" '(' SubPartDefinitionList ')'
+	{
+		$$ = &ast.PartitionMethod{
+			Tp:                      model.PartitionTypeRange,
+			Expr:                    $5.(ast.ExprNode),
+			SubPartitionDefinitions: $10.([]*ast.SubPartitionDefinition),
+		}
+	}
+|	"SUBPARTITION" "BY" "RANGE" "COLUMNS" '(' ColumnNameList ')' "SUBPARTITION" "TEMPLATE" '(' SubPartDefinitionList ')'
+	{
+		$$ = &ast.PartitionMethod{
+			Tp:                      model.PartitionTypeRange,
+			ColumnNames:             $6.([]*ast.ColumnName),
+			SubPartitionDefinitions: $11.([]*ast.SubPartitionDefinition),
+		}
+	}
+|	"SUBPARTITION" "BY" "LIST" '(' Expression ')' "SUBPARTITION" "TEMPLATE" '(' SubPartDefinitionList ')'
+	{
+		$$ = &ast.PartitionMethod{
+			Tp:                      model.PartitionTypeList,
+			Expr:                    $5.(ast.ExprNode),
+			SubPartitionDefinitions: $10.([]*ast.SubPartitionDefinition),
+		}
+	}
+|	"SUBPARTITION" "BY" "LIST" "COLUMNS" '(' ColumnNameList ')' "SUBPARTITION" "TEMPLATE" '(' SubPartDefinitionList ')'
+	{
+		$$ = &ast.PartitionMethod{
+			Tp:                      model.PartitionTypeList,
+			ColumnNames:             $6.([]*ast.ColumnName),
+			SubPartitionDefinitions: $11.([]*ast.SubPartitionDefinition),
+		}
+	}
+|	"SUBPARTITION" "BY" LinearOpt "HASH" '(' Expression ')' "SUBPARTITION" "TEMPLATE" '(' SubPartDefinitionList ')'
+	{
+		$$ = &ast.PartitionMethod{
+			Tp:                      model.PartitionTypeHash,
+			Linear:                  len($3) != 0,
+			Expr:                    $6.(ast.ExprNode),
+			SubPartitionDefinitions: $11.([]*ast.SubPartitionDefinition),
+		}
+	}
+|	"SUBPARTITION" "BY" LinearOpt "KEY" PartitionKeyAlgorithmOpt '(' ColumnNameListOpt ')' "SUBPARTITION" "TEMPLATE" '(' SubPartDefinitionList ')'
+	{
+		$$ = &ast.PartitionMethod{
+			Tp:                      model.PartitionTypeKey,
+			Linear:                  len($3) != 0,
+			ColumnNames:             $7.([]*ast.ColumnName),
+			SubPartitionDefinitions: $12.([]*ast.SubPartitionDefinition),
+		}
+	}
+|	"SUBPARTITION" "BY" "RANGE" '(' Expression ')' "SUBPARTITION" "TEMPLATE" '(' SubPartDefinitionList ')' "PARTITIONS" LengthNum
+	{
+		num := $13.(uint64)
+		if num == 0 {
+			yylex.AppendError(ast.ErrNoParts.GenWithStackByArgs("partitions"))
+			return 1
+		}
+		$$ = &ast.PartitionMethod{
+			Tp:                      model.PartitionTypeRange,
+			Expr:                    $5.(ast.ExprNode),
+			SubPartitionDefinitions: $10.([]*ast.SubPartitionDefinition),
+			Num:                     num,
+		}
+	}
+|	"SUBPARTITION" "BY" "RANGE" "COLUMNS" '(' ColumnNameList ')' "SUBPARTITION" "TEMPLATE" '(' SubPartDefinitionList ')' "PARTITIONS" LengthNum
+	{
+		num := $14.(uint64)
+		if num == 0 {
+			yylex.AppendError(ast.ErrNoParts.GenWithStackByArgs("partitions"))
+			return 1
+		}
+		$$ = &ast.PartitionMethod{
+			Tp:                      model.PartitionTypeRange,
+			ColumnNames:             $6.([]*ast.ColumnName),
+			SubPartitionDefinitions: $11.([]*ast.SubPartitionDefinition),
+			Num:                     num,
+		}
+	}
+|	"SUBPARTITION" "BY" "LIST" '(' Expression ')' "SUBPARTITION" "TEMPLATE" '(' SubPartDefinitionList ')' "PARTITIONS" LengthNum
+	{
+		num := $13.(uint64)
+		if num == 0 {
+			yylex.AppendError(ast.ErrNoParts.GenWithStackByArgs("partitions"))
+			return 1
+		}
+		$$ = &ast.PartitionMethod{
+			Tp:                      model.PartitionTypeList,
+			Expr:                    $5.(ast.ExprNode),
+			SubPartitionDefinitions: $10.([]*ast.SubPartitionDefinition),
+			Num:                     num,
+		}
+	}
+|	"SUBPARTITION" "BY" "LIST" "COLUMNS" '(' ColumnNameList ')' "SUBPARTITION" "TEMPLATE" '(' SubPartDefinitionList ')' "PARTITIONS" LengthNum
+	{
+		num := $14.(uint64)
+		if num == 0 {
+			yylex.AppendError(ast.ErrNoParts.GenWithStackByArgs("partitions"))
+			return 1
+		}
+		$$ = &ast.PartitionMethod{
+			Tp:                      model.PartitionTypeList,
+			ColumnNames:             $6.([]*ast.ColumnName),
+			SubPartitionDefinitions: $11.([]*ast.SubPartitionDefinition),
+			Num:                     num,
+		}
+	}
+|	"SUBPARTITION" "BY" LinearOpt "HASH" '(' Expression ')' "SUBPARTITION" "TEMPLATE" '(' SubPartDefinitionList ')' "PARTITIONS" LengthNum
+	{
+		num := $14.(uint64)
+		if num == 0 {
+			yylex.AppendError(ast.ErrNoParts.GenWithStackByArgs("partitions"))
+			return 1
+		}
+		$$ = &ast.PartitionMethod{
+			Tp:                      model.PartitionTypeHash,
+			Linear:                  len($3) != 0,
+			Expr:                    $6.(ast.ExprNode),
+			SubPartitionDefinitions: $11.([]*ast.SubPartitionDefinition),
+			Num:                     num,
+		}
+	}
+|	"SUBPARTITION" "BY" LinearOpt "KEY" PartitionKeyAlgorithmOpt '(' ColumnNameListOpt ')' "SUBPARTITION" "TEMPLATE" '(' SubPartDefinitionList ')' "PARTITIONS" LengthNum
+	{
+		num := $15.(uint64)
+		if num == 0 {
+			yylex.AppendError(ast.ErrNoParts.GenWithStackByArgs("partitions"))
+			return 1
+		}
+		$$ = &ast.PartitionMethod{
+			Tp:                      model.PartitionTypeKey,
+			Linear:                  len($3) != 0,
+			ColumnNames:             $7.([]*ast.ColumnName),
+			SubPartitionDefinitions: $12.([]*ast.SubPartitionDefinition),
+			Num:                     num,
+		}
+	}
 
 SubPartitionNumOpt:
 	{
@@ -3356,11 +3532,17 @@ SubPartDefinitionList:
 	}
 
 SubPartDefinition:
-	"SUBPARTITION" Identifier PartDefOptionList
+	"SUBPARTITION" Identifier PartDefValuesOpt PartDefOptionList
 	{
+		clause := $3.(ast.PartitionDefinitionClause)
+		// If clause is PartitionDefinitionClauseNone, set it to nil
+		if _, ok := clause.(*ast.PartitionDefinitionClauseNone); ok {
+			clause = nil
+		}
 		$$ = &ast.SubPartitionDefinition{
 			Name:    model.NewCIStr($2),
-			Options: $3.([]*ast.TableOption),
+			Clause:  clause,
+			Options: $4.([]*ast.TableOption),
 		}
 	}
 
@@ -3441,6 +3623,10 @@ PartDefValuesOpt:
 			}
 		}
 		$$ = &ast.PartitionDefinitionClauseIn{Values: values}
+	}
+|	"VALUES" "IN" '(' "DEFAULT" ')'
+	{
+		$$ = &ast.PartitionDefinitionClauseIn{}
 	}
 |	"HISTORY"
 	{
