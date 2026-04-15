@@ -26,6 +26,7 @@
 package parser
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -225,6 +226,7 @@ import (
 	straightJoin      "STRAIGHT_JOIN"
 	tableKwd          "TABLE"
 	tablegroup        "TABLEGROUP"
+	tableMode         "TABLE_MODE"
 	template          "TEMPLATE"
 	stored            "STORED"
 	terminated        "TERMINATED"
@@ -279,6 +281,7 @@ import (
 	binding                "BINDING"
 	binlog                 "BINLOG"
 	bitType                "BIT"
+	blockSize              "BLOCK_SIZE"
 	booleanType            "BOOLEAN"
 	boolType               "BOOL"
 	btree                  "BTREE"
@@ -321,6 +324,7 @@ import (
 	do                     "DO"
 	duplicate              "DUPLICATE"
 	dynamic                "DYNAMIC"
+	dynamicPartitionPolicy "DYNAMIC_PARTITION_POLICY"
 	enable                 "ENABLE"
 	end                    "END"
 	engine                 "ENGINE"
@@ -382,6 +386,7 @@ import (
 	partitioning           "PARTITIONING"
 	password               "PASSWORD"
 	partitions             "PARTITIONS"
+	pctfree                "PCTFREE"
 	pipesAsOr
 	plugins                "PLUGINS"
 	preSplitRegions        "PRE_SPLIT_REGIONS"
@@ -401,6 +406,7 @@ import (
 	reorganize             "REORGANIZE"
 	repair                 "REPAIR"
 	repeatable             "REPEATABLE"
+	replicaNum             "REPLICA_NUM"
 	replication            "REPLICATION"
 	reverse                "REVERSE"
 	rollback               "ROLLBACK"
@@ -435,6 +441,7 @@ import (
 	tablegroups            "TABLEGROUPS"
 	tables                 "TABLES"
 	tablespace             "TABLESPACE"
+	tabletSize             "TABLET_SIZE"
 	temporary              "TEMPORARY"
 	temptable              "TEMPTABLE"
 	textType               "TEXT"
@@ -448,6 +455,7 @@ import (
 	tp                     "TYPE"
 	uncommitted            "UNCOMMITTED"
 	unknown                "UNKNOWN"
+	useBloomFilter         "USE_BLOOM_FILTER"
 	user                   "USER"
 	validation             "VALIDATION"
 	undefined              "UNDEFINED"
@@ -691,6 +699,9 @@ import (
 	ConstraintKeywordOpt          "Constraint Keyword or empty"
 	CreateTableOptionListOpt      "create table option list opt"
 	CreateTableSelectOpt          "Select/Union statement in CREATE TABLE ... SELECT"
+	DynamicPartitionPolicyInner   "dynamic partition policy option list"
+	DynamicPartitionPolicyPair    "dynamic partition policy option pair"
+	DynamicPartitionPolicyValue   "dynamic partition policy value"
 	CreateViewSelectOpt           "Select/Union statement in CREATE VIEW ... AS SELECT"
 	DatabaseOption                "CREATE Database specification"
 	DatabaseOptionList            "CREATE Database specification list"
@@ -971,6 +982,10 @@ import (
 	LinearOpt         "linear or empty"
 	FieldsOrColumns   "Fields or columns"
 	GetFormatSelector "{DATE|DATETIME|TIME|TIMESTAMP}"
+	TableModeValue    "TABLE_MODE value"
+
+%type	<item>
+	BoolLiteral "Boolean literal"
 
 %type	<ident>
 	ODBCDateTimeType                "ODBC type keywords for date and time literals"
@@ -3153,6 +3168,17 @@ PartitionOpt:
 		method := $3.(*ast.PartitionMethod)
 		method.Num = $4.(uint64)
 		sub, _ := $5.(*ast.PartitionMethod)
+		// If subpartition method has Num set AND SubPartitionDefinitions is set
+		// (indicating PARTITIONS N after SUBPARTITION TEMPLATE), use it as the main
+		// partition number and clear it from sub
+		if sub != nil && sub.Num > 0 && len(sub.SubPartitionDefinitions) > 0 {
+			if method.Num > 0 {
+				yylex.AppendError(errors.New("Duplicate PARTITIONS clause"))
+				return 1
+			}
+			method.Num = sub.Num
+			sub.Num = 0
+		}
 		defs, _ := $6.([]*ast.PartitionDefinition)
 		opt := &ast.PartitionOptions{
 			PartitionMethod: *method,
@@ -3264,6 +3290,170 @@ SubPartitionOpt:
 		method.Num = $4.(uint64)
 		$$ = method
 	}
+|	"SUBPARTITION" "BY" "RANGE" '(' Expression ')'
+	{
+		$$ = &ast.PartitionMethod{
+			Tp:   model.PartitionTypeRange,
+			Expr: $5.(ast.ExprNode),
+		}
+	}
+|	"SUBPARTITION" "BY" "RANGE" "COLUMNS" '(' ColumnNameList ')'
+	{
+		$$ = &ast.PartitionMethod{
+			Tp:          model.PartitionTypeRange,
+			ColumnNames: $6.([]*ast.ColumnName),
+		}
+	}
+|	"SUBPARTITION" "BY" "LIST" '(' Expression ')'
+	{
+		$$ = &ast.PartitionMethod{
+			Tp:   model.PartitionTypeList,
+			Expr: $5.(ast.ExprNode),
+		}
+	}
+|	"SUBPARTITION" "BY" "LIST" "COLUMNS" '(' ColumnNameList ')'
+	{
+		$$ = &ast.PartitionMethod{
+			Tp:          model.PartitionTypeList,
+			ColumnNames: $6.([]*ast.ColumnName),
+		}
+	}
+|	"SUBPARTITION" "BY" "RANGE" '(' Expression ')' "SUBPARTITION" "TEMPLATE" '(' SubPartDefinitionList ')'
+	{
+		$$ = &ast.PartitionMethod{
+			Tp:                      model.PartitionTypeRange,
+			Expr:                    $5.(ast.ExprNode),
+			SubPartitionDefinitions: $10.([]*ast.SubPartitionDefinition),
+		}
+	}
+|	"SUBPARTITION" "BY" "RANGE" "COLUMNS" '(' ColumnNameList ')' "SUBPARTITION" "TEMPLATE" '(' SubPartDefinitionList ')'
+	{
+		$$ = &ast.PartitionMethod{
+			Tp:                      model.PartitionTypeRange,
+			ColumnNames:             $6.([]*ast.ColumnName),
+			SubPartitionDefinitions: $11.([]*ast.SubPartitionDefinition),
+		}
+	}
+|	"SUBPARTITION" "BY" "LIST" '(' Expression ')' "SUBPARTITION" "TEMPLATE" '(' SubPartDefinitionList ')'
+	{
+		$$ = &ast.PartitionMethod{
+			Tp:                      model.PartitionTypeList,
+			Expr:                    $5.(ast.ExprNode),
+			SubPartitionDefinitions: $10.([]*ast.SubPartitionDefinition),
+		}
+	}
+|	"SUBPARTITION" "BY" "LIST" "COLUMNS" '(' ColumnNameList ')' "SUBPARTITION" "TEMPLATE" '(' SubPartDefinitionList ')'
+	{
+		$$ = &ast.PartitionMethod{
+			Tp:                      model.PartitionTypeList,
+			ColumnNames:             $6.([]*ast.ColumnName),
+			SubPartitionDefinitions: $11.([]*ast.SubPartitionDefinition),
+		}
+	}
+|	"SUBPARTITION" "BY" LinearOpt "HASH" '(' Expression ')' "SUBPARTITION" "TEMPLATE" '(' SubPartDefinitionList ')'
+	{
+		$$ = &ast.PartitionMethod{
+			Tp:                      model.PartitionTypeHash,
+			Linear:                  len($3) != 0,
+			Expr:                    $6.(ast.ExprNode),
+			SubPartitionDefinitions: $11.([]*ast.SubPartitionDefinition),
+		}
+	}
+|	"SUBPARTITION" "BY" LinearOpt "KEY" PartitionKeyAlgorithmOpt '(' ColumnNameListOpt ')' "SUBPARTITION" "TEMPLATE" '(' SubPartDefinitionList ')'
+	{
+		$$ = &ast.PartitionMethod{
+			Tp:                      model.PartitionTypeKey,
+			Linear:                  len($3) != 0,
+			ColumnNames:             $7.([]*ast.ColumnName),
+			SubPartitionDefinitions: $12.([]*ast.SubPartitionDefinition),
+		}
+	}
+|	"SUBPARTITION" "BY" "RANGE" '(' Expression ')' "SUBPARTITION" "TEMPLATE" '(' SubPartDefinitionList ')' "PARTITIONS" LengthNum
+	{
+		num := $13.(uint64)
+		if num == 0 {
+			yylex.AppendError(ast.ErrNoParts.GenWithStackByArgs("partitions"))
+			return 1
+		}
+		$$ = &ast.PartitionMethod{
+			Tp:                      model.PartitionTypeRange,
+			Expr:                    $5.(ast.ExprNode),
+			SubPartitionDefinitions: $10.([]*ast.SubPartitionDefinition),
+			Num:                     num,
+		}
+	}
+|	"SUBPARTITION" "BY" "RANGE" "COLUMNS" '(' ColumnNameList ')' "SUBPARTITION" "TEMPLATE" '(' SubPartDefinitionList ')' "PARTITIONS" LengthNum
+	{
+		num := $14.(uint64)
+		if num == 0 {
+			yylex.AppendError(ast.ErrNoParts.GenWithStackByArgs("partitions"))
+			return 1
+		}
+		$$ = &ast.PartitionMethod{
+			Tp:                      model.PartitionTypeRange,
+			ColumnNames:             $6.([]*ast.ColumnName),
+			SubPartitionDefinitions: $11.([]*ast.SubPartitionDefinition),
+			Num:                     num,
+		}
+	}
+|	"SUBPARTITION" "BY" "LIST" '(' Expression ')' "SUBPARTITION" "TEMPLATE" '(' SubPartDefinitionList ')' "PARTITIONS" LengthNum
+	{
+		num := $13.(uint64)
+		if num == 0 {
+			yylex.AppendError(ast.ErrNoParts.GenWithStackByArgs("partitions"))
+			return 1
+		}
+		$$ = &ast.PartitionMethod{
+			Tp:                      model.PartitionTypeList,
+			Expr:                    $5.(ast.ExprNode),
+			SubPartitionDefinitions: $10.([]*ast.SubPartitionDefinition),
+			Num:                     num,
+		}
+	}
+|	"SUBPARTITION" "BY" "LIST" "COLUMNS" '(' ColumnNameList ')' "SUBPARTITION" "TEMPLATE" '(' SubPartDefinitionList ')' "PARTITIONS" LengthNum
+	{
+		num := $14.(uint64)
+		if num == 0 {
+			yylex.AppendError(ast.ErrNoParts.GenWithStackByArgs("partitions"))
+			return 1
+		}
+		$$ = &ast.PartitionMethod{
+			Tp:                      model.PartitionTypeList,
+			ColumnNames:             $6.([]*ast.ColumnName),
+			SubPartitionDefinitions: $11.([]*ast.SubPartitionDefinition),
+			Num:                     num,
+		}
+	}
+|	"SUBPARTITION" "BY" LinearOpt "HASH" '(' Expression ')' "SUBPARTITION" "TEMPLATE" '(' SubPartDefinitionList ')' "PARTITIONS" LengthNum
+	{
+		num := $14.(uint64)
+		if num == 0 {
+			yylex.AppendError(ast.ErrNoParts.GenWithStackByArgs("partitions"))
+			return 1
+		}
+		$$ = &ast.PartitionMethod{
+			Tp:                      model.PartitionTypeHash,
+			Linear:                  len($3) != 0,
+			Expr:                    $6.(ast.ExprNode),
+			SubPartitionDefinitions: $11.([]*ast.SubPartitionDefinition),
+			Num:                     num,
+		}
+	}
+|	"SUBPARTITION" "BY" LinearOpt "KEY" PartitionKeyAlgorithmOpt '(' ColumnNameListOpt ')' "SUBPARTITION" "TEMPLATE" '(' SubPartDefinitionList ')' "PARTITIONS" LengthNum
+	{
+		num := $15.(uint64)
+		if num == 0 {
+			yylex.AppendError(ast.ErrNoParts.GenWithStackByArgs("partitions"))
+			return 1
+		}
+		$$ = &ast.PartitionMethod{
+			Tp:                      model.PartitionTypeKey,
+			Linear:                  len($3) != 0,
+			ColumnNames:             $7.([]*ast.ColumnName),
+			SubPartitionDefinitions: $12.([]*ast.SubPartitionDefinition),
+			Num:                     num,
+		}
+	}
 
 SubPartitionNumOpt:
 	{
@@ -3346,11 +3536,17 @@ SubPartDefinitionList:
 	}
 
 SubPartDefinition:
-	"SUBPARTITION" Identifier PartDefOptionList
+	"SUBPARTITION" Identifier PartDefValuesOpt PartDefOptionList
 	{
+		clause := $3.(ast.PartitionDefinitionClause)
+		// If clause is PartitionDefinitionClauseNone, set it to nil
+		if _, ok := clause.(*ast.PartitionDefinitionClauseNone); ok {
+			clause = nil
+		}
 		$$ = &ast.SubPartitionDefinition{
 			Name:    model.NewCIStr($2),
-			Options: $3.([]*ast.TableOption),
+			Clause:  clause,
+			Options: $4.([]*ast.TableOption),
 		}
 	}
 
@@ -3431,6 +3627,10 @@ PartDefValuesOpt:
 			}
 		}
 		$$ = &ast.PartitionDefinitionClauseIn{Values: values}
+	}
+|	"VALUES" "IN" '(' "DEFAULT" ')'
+	{
+		$$ = &ast.PartitionDefinitionClauseIn{}
 	}
 |	"HISTORY"
 	{
@@ -4478,6 +4678,7 @@ UnReservedKeyword:
 |	"BOOLEAN"
 |	"BTREE"
 |	"BYTE"
+|	"BLOCK_SIZE"
 |	"CLEANUP"
 |	"CHARSET"
 |	"COLUMNS"
@@ -4502,6 +4703,7 @@ UnReservedKeyword:
 |	"DO"
 |	"DUPLICATE"
 |	"DYNAMIC"
+|	"DYNAMIC_PARTITION_POLICY"
 |	"END"
 |	"ENGINE"
 |	"ENGINES"
@@ -4526,6 +4728,7 @@ UnReservedKeyword:
 |	"OFFSET"
 |	"PARSER"
 |	"PASSWORD" %prec lowerThanEq
+|	"PCTFREE"
 |	"PREPARE"
 |	"PRE_SPLIT_REGIONS"
 |	"QUICK"
@@ -4544,6 +4747,7 @@ UnReservedKeyword:
 |	"TABLEGROUPS"
 |	"TABLES"
 |	"TABLESPACE"
+|	"TABLET_SIZE"
 |	"TEXT"
 |	"THAN"
 |	"TIME" %prec lowerThanStringLitToken
@@ -4560,6 +4764,7 @@ UnReservedKeyword:
 |	"ANY"
 |	"SOME"
 |	"USER"
+|	"USE_BLOOM_FILTER"
 |	"IDENTIFIED"
 |	"COLLATION"
 |	"COMMENT"
@@ -4628,6 +4833,7 @@ UnReservedKeyword:
 |	"MAX_UPDATES_PER_HOUR"
 |	"MAX_USER_CONNECTIONS"
 |	"REPLICATION"
+|	"REPLICA_NUM"
 |	"CLIENT"
 |	"SLAVE"
 |	"RELOAD"
@@ -6234,10 +6440,11 @@ TableRef:
 	}
 
 TableFactor:
-	TableName TableAsNameOpt IndexHintListOpt
+	TableName TableAsNameOpt PartitionNameListOpt IndexHintListOpt
 	{
 		tn := $1.(*ast.TableName)
-		tn.IndexHints = $3.([]*ast.IndexHint)
+		tn.PartitionNames = $3.([]model.CIStr)
+		tn.IndexHints = $4.([]*ast.IndexHint)
 		$$ = &ast.TableSource{Source: tn, AsName: $2.(model.CIStr)}
 	}
 |	'(' SelectStmt ')' TableAsName
@@ -7794,6 +8001,88 @@ TableOption:
 |	SetOpt "TABLEGROUP" EqOpt StringName
 	{
 		$$ = &ast.TableOption{Tp: ast.TableOptionTableGroup, StrValue: $4.(string)}
+	}
+|	SetOpt "TABLE_MODE" EqOpt TableModeValue
+	{
+		$$ = &ast.TableOption{Tp: ast.TableOptionTableMode, StrValue: $4}
+	}
+|	"REPLICA_NUM" EqOpt LengthNum
+	{
+		$$ = &ast.TableOption{Tp: ast.TableOptionReplicaNum, UintValue: $3.(uint64)}
+	}
+|	"BLOCK_SIZE" EqOpt LengthNum
+	{
+		$$ = &ast.TableOption{Tp: ast.TableOptionBlockSize, UintValue: $3.(uint64)}
+	}
+|	"USE_BLOOM_FILTER" EqOpt BoolLiteral
+	{
+		$$ = &ast.TableOption{Tp: ast.TableOptionUseBloomFilter, BoolValue: $3.(bool)}
+	}
+|	"TABLET_SIZE" EqOpt LengthNum
+	{
+		$$ = &ast.TableOption{Tp: ast.TableOptionTabletSize, UintValue: $3.(uint64)}
+	}
+|	"PCTFREE" EqOpt LengthNum
+	{
+		$$ = &ast.TableOption{Tp: ast.TableOptionPctFree, UintValue: $3.(uint64)}
+	}
+|	"DYNAMIC_PARTITION_POLICY" EqOpt '(' DynamicPartitionPolicyInner ')'
+	{
+		$$ = &ast.TableOption{Tp: ast.TableOptionDynamicPartitionPolicy, StrValue: $4.(string)}
+	}
+
+DynamicPartitionPolicyInner:
+	DynamicPartitionPolicyPair
+	{
+		$$ = $1.(string)
+	}
+|	DynamicPartitionPolicyInner ',' DynamicPartitionPolicyPair
+	{
+		$$ = $1.(string) + ", " + $3.(string)
+	}
+
+DynamicPartitionPolicyPair:
+	Identifier EqOpt DynamicPartitionPolicyValue
+	{
+		$$ = $1 + " = " + $3.(string)
+	}
+
+DynamicPartitionPolicyValue:
+	stringLit
+	{
+		$$ = "'" + strings.Replace($1, "'", "''", -1) + "'"
+	}
+|	BoolLiteral
+	{
+		if $1.(bool) {
+			$$ = "true"
+		} else {
+			$$ = "false"
+		}
+	}
+|	Identifier
+	{
+		$$ = $1
+	}
+
+BoolLiteral:
+	"TRUE"
+	{
+		$$ = true
+	}
+|	"FALSE"
+	{
+		$$ = false
+	}
+
+TableModeValue:
+	stringLit
+	{
+		$$ = strings.ToUpper($1)
+	}
+|	Identifier
+	{
+		$$ = strings.ToUpper($1)
 	}
 
 StatsPersistentVal:

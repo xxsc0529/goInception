@@ -1878,7 +1878,15 @@ const (
 	TableOptionTableCheckSum
 	TableOptionUnion
 	TableOptionEncryption
+	TableOptionTableMode
 	TableOptionTableGroup
+	// OceanBase specific options
+	TableOptionReplicaNum
+	TableOptionBlockSize
+	TableOptionUseBloomFilter
+	TableOptionTabletSize
+	TableOptionPctFree
+	TableOptionDynamicPartitionPolicy
 	TableOptionPlacementPrimaryRegion       = TableOptionType(PlacementOptionPrimaryRegion)
 	TableOptionPlacementRegions             = TableOptionType(PlacementOptionRegions)
 	TableOptionPlacementFollowerCount       = TableOptionType(PlacementOptionFollowerCount)
@@ -2132,10 +2140,43 @@ func (n *TableOption) Restore(ctx *format.RestoreCtx) error {
 		ctx.WriteKeyWord("ENCRYPTION ")
 		ctx.WritePlain("= ")
 		ctx.WriteString(n.StrValue)
+	case TableOptionTableMode:
+		ctx.WriteKeyWord("TABLE_MODE ")
+		ctx.WritePlain("= ")
+		ctx.WriteString(n.StrValue)
 	case TableOptionTableGroup:
 		ctx.WriteKeyWord("TABLEGROUP ")
 		ctx.WritePlain("= ")
 		ctx.WriteString(n.StrValue)
+	case TableOptionReplicaNum:
+		ctx.WriteKeyWord("REPLICA_NUM ")
+		ctx.WritePlain("= ")
+		ctx.WritePlainf("%d", n.UintValue)
+	case TableOptionBlockSize:
+		ctx.WriteKeyWord("BLOCK_SIZE ")
+		ctx.WritePlain("= ")
+		ctx.WritePlainf("%d", n.UintValue)
+	case TableOptionUseBloomFilter:
+		ctx.WriteKeyWord("USE_BLOOM_FILTER ")
+		ctx.WritePlain("= ")
+		if n.BoolValue {
+			ctx.WritePlain("true")
+		} else {
+			ctx.WritePlain("false")
+		}
+	case TableOptionTabletSize:
+		ctx.WriteKeyWord("TABLET_SIZE ")
+		ctx.WritePlain("= ")
+		ctx.WritePlainf("%d", n.UintValue)
+	case TableOptionPctFree:
+		ctx.WriteKeyWord("PCTFREE ")
+		ctx.WritePlain("= ")
+		ctx.WritePlainf("%d", n.UintValue)
+	case TableOptionDynamicPartitionPolicy:
+		ctx.WriteKeyWord("DYNAMIC_PARTITION_POLICY ")
+		ctx.WritePlain("(")
+		ctx.WritePlain(n.StrValue)
+		ctx.WritePlain(")")
 	case TableOptionPlacementPrimaryRegion, TableOptionPlacementRegions, TableOptionPlacementFollowerCount, TableOptionPlacementLeaderConstraints, TableOptionPlacementLearnerCount, TableOptionPlacementVoterCount, TableOptionPlacementSchedule, TableOptionPlacementConstraints, TableOptionPlacementFollowerConstraints, TableOptionPlacementVoterConstraints, TableOptionPlacementLearnerConstraints, TableOptionPlacementPolicy:
 		placementOpt := PlacementOption{
 			Tp:        PlacementOptionType(n.Tp),
@@ -3310,12 +3351,18 @@ var (
 
 type SubPartitionDefinition struct {
 	Name    model.CIStr
+	Clause  PartitionDefinitionClause
 	Options []*TableOption
 }
 
 func (spd *SubPartitionDefinition) Restore(ctx *RestoreCtx) error {
 	ctx.WriteKeyWord("SUBPARTITION ")
 	ctx.WriteName(spd.Name.O)
+	if spd.Clause != nil {
+		if err := spd.Clause.restore(ctx); err != nil {
+			return errors.Annotate(err, "An error occurred while restore SubPartitionDefinition.Clause")
+		}
+	}
 	for i, opt := range spd.Options {
 		ctx.WritePlain(" ")
 		if err := opt.Restore(ctx); err != nil {
@@ -3583,6 +3630,9 @@ type PartitionMethod struct {
 
 	// Num is the number of (sub)partitions required by the method.
 	Num uint64
+
+	// SubPartitionDefinitions stores the SUBPARTITION TEMPLATE definitions
+	SubPartitionDefinitions []*SubPartitionDefinition
 }
 
 // Restore implements the Node interface
@@ -3663,6 +3713,11 @@ func (n *PartitionMethod) acceptInPlace(v Visitor) bool {
 			return false
 		}
 		n.Unit = unit.(*ValueExpr)
+	}
+	for _, spd := range n.SubPartitionDefinitions {
+		if spd.Clause != nil && !spd.Clause.acceptInPlace(v) {
+			return false
+		}
 	}
 	return true
 }
@@ -3747,7 +3802,19 @@ func (n *PartitionOptions) Restore(ctx *RestoreCtx) error {
 		if err := n.Sub.Restore(ctx); err != nil {
 			return errors.Annotate(err, "An error occurred while restore PartitionOptions.Sub")
 		}
-		if n.Sub.Num > 0 {
+		if len(n.Sub.SubPartitionDefinitions) > 0 {
+			ctx.WriteKeyWord(" SUBPARTITION TEMPLATE ")
+			ctx.WritePlain("(")
+			for i, spd := range n.Sub.SubPartitionDefinitions {
+				if i > 0 {
+					ctx.WritePlain(",")
+				}
+				if err := spd.Restore(ctx); err != nil {
+					return errors.Annotatef(err, "An error occurred while restore PartitionOptions.Sub.SubPartitionDefinitions[%d]", i)
+				}
+			}
+			ctx.WritePlain(")")
+		} else if n.Sub.Num > 0 {
 			ctx.WriteKeyWord(" SUBPARTITIONS ")
 			ctx.WritePlainf("%d", n.Sub.Num)
 		}
